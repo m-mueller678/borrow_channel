@@ -1,26 +1,37 @@
 #![no_std]
-
+//!
+//! ```rust
+//! # use crate::borrow_channel::LocalBorrowChannel;
+//! # use std::rc::Rc;
+//! let channel = Rc::new(LocalBorrowChannel::<&i32>::new());
+//! let uses_a = ||{
+//!     let guard = channel.borrow();
+//!     assert_eq!(**guard ,42);
+//! };
+//! let mut a=42;
+//! channel.lend(&mut a,uses_a);
+//! ```
 use core::cell::Cell;
 use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut};
 use core::ptr;
 use scopeguard::defer;
 
-unsafe trait ChannelBorrow {
+pub unsafe trait ChannelBorrow {
     const IS_SHARED: bool;
     type Borrowed<'a>;
     fn to_ptr(b: Self::Borrowed<'_>) -> *mut ();
     unsafe fn from_ptr<'a>(p: *mut ()) -> Self::Borrowed<'a>;
 }
 
-struct LocalBorrowMutChannel<T: ChannelBorrow> {
+pub struct LocalBorrowChannel<T: ChannelBorrow> {
     ptr: Cell<*mut ()>,
     count: Cell<usize>,
     _p: PhantomData<T>,
 }
 
-struct LocalBorrowChannelGuard<'a, T: ChannelBorrow> {
-    channel: &'a LocalBorrowMutChannel<T>,
+pub struct LocalBorrowChannelGuard<'a, T: ChannelBorrow> {
+    channel: &'a LocalBorrowChannel<T>,
     borrowed: T::Borrowed<'a>,
 }
 
@@ -44,9 +55,9 @@ impl<'a, T: ChannelBorrow> DerefMut for LocalBorrowChannelGuard<'a, T> {
     }
 }
 
-impl<T: ChannelBorrow> LocalBorrowMutChannel<T> {
+impl<T: ChannelBorrow> LocalBorrowChannel<T> {
     pub fn new() -> Self {
-        LocalBorrowMutChannel {
+        LocalBorrowChannel {
             ptr: Cell::new(ptr::null_mut()),
             count: Cell::new(0),
             _p: PhantomData,
