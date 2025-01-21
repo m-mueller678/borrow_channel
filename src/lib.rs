@@ -201,9 +201,9 @@ impl<T: Reborrowable, L: Lock> BorrowChannel<T, L> {
         f()
     }
 
-    /// Use a borrow that was provided using [borrow](Self::borrow).
+    /// Use a borrow that was provided using [lend](Self::lend).
     ///
-    /// If the borrow is still in use when the providing call to [borrow](Self::borrow) ends, the program aborts.
+    /// If the borrow is still in use when the providing call to `lend` ends, the program aborts.
     pub fn borrow(&self) -> BorrowChannelGuard<'_, T, L> {
         let old_count = self.count().fetch_add(1u8.into(), Acquire);
         if old_count & state_mask() != state_filled() {
