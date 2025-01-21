@@ -150,7 +150,7 @@ impl<T: Reborrowable, L: Lock> Drop for BorrowChannelGuard<'_, T, L> {
 }
 
 impl<T: Reborrowable, L: Lock> BorrowChannelGuard<'_, T, L> {
-    pub fn with<'b>(&'b mut self, f: impl FnOnce(T::Borrowed<'b>)) {
+    pub fn with<'b, R>(&'b mut self, f: impl FnOnce(T::Borrowed<'b>) -> R) -> R {
         f(unsafe {
             let ptr: *const MaybeUninit<T::Borrowed<'static>> = self.channel.data.get();
             ptr.cast::<T::Borrowed<'_>>().read()
