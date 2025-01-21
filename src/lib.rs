@@ -1,96 +1,184 @@
 #![no_std]
 //!
 //! ```rust
-//! # use crate::borrow_channel::LocalBorrowChannel;
+//! # use crate::borrow_channel::BorrowChannel;
 //! # use std::rc::Rc;
-//! let channel = Rc::new(LocalBorrowChannel::<&i32>::new());
-//! let uses_a = ||{
-//!     let guard = channel.borrow();
-//!     assert_eq!(**guard ,42);
+//! let channel = Rc::new(BorrowChannel::<&i32, _>::new_unsync());
+//! let mut_channel = Rc::new(BorrowChannel::<&mut i32, _>::new_unsync());
+//!
+//! let reads_a = || {
+//!     assert_eq!(**channel.borrow(), 42);
 //! };
-//! let mut a=42;
-//! channel.lend(&mut a,uses_a);
+//! let writes_a = || mut_channel.borrow().with(|b| *b = 42);
+//!
+//! let mut a = 0;
+//! mut_channel.lend(&mut a, writes_a);
+//! channel.lend(&mut a, reads_a);
 //! ```
-use core::cell::Cell;
+
+use core::cell::{Cell, UnsafeCell};
+use core::fmt::Debug;
 use core::marker::PhantomData;
-use core::ops::{Deref, DerefMut};
-use core::ptr;
+use core::mem::{transmute, MaybeUninit};
+use core::ops::{Deref, Shl};
+use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
+use radium::marker::{Nuclear, NumericOps};
+use radium::{Isotope, Radium};
 use scopeguard::defer;
 
 pub unsafe trait ChannelBorrow {
     const IS_SHARED: bool;
     type Borrowed<'a>;
-    fn to_ptr(b: Self::Borrowed<'_>) -> *mut ();
-    unsafe fn from_ptr<'a>(p: *mut ()) -> Self::Borrowed<'a>;
 }
 
-pub struct LocalBorrowChannel<T: ChannelBorrow> {
-    ptr: Cell<*mut ()>,
-    count: Cell<usize>,
+pub struct UnsyncLock<T: CounterInner> {
+    _p: PhantomData<T>,
+}
+pub struct SyncLock<T: CounterInner> {
     _p: PhantomData<T>,
 }
 
-pub struct LocalBorrowChannelGuard<'a, T: ChannelBorrow> {
-    channel: &'a LocalBorrowChannel<T>,
-    borrowed: T::Borrowed<'a>,
+macro_rules! impl_channel_lock {
+    ($T:ty) => {
+        impl CounterInner for $T {}
+        impl ChannelLock for UnsyncLock<$T> {
+            type CounterInner = $T;
+            type Counter = Cell<$T>;
+        }
+
+        impl ChannelLock for SyncLock<$T> {
+            type CounterInner = $T;
+            type Counter = Isotope<$T>;
+        }
+    };
 }
 
-impl<'a, T: ChannelBorrow> Drop for LocalBorrowChannelGuard<'a, T> {
+impl_channel_lock!(u64);
+impl_channel_lock!(u32);
+impl_channel_lock!(u16);
+impl_channel_lock!(u8);
+
+trait ChannelLock {
+    type CounterInner: CounterInner;
+    type Counter: Radium<Item = Self::CounterInner>;
+}
+
+trait CounterInner: From<u8> + Shl<u32, Output = Self> + NumericOps + Debug + Copy + Nuclear {}
+
+fn counter_bits<C: CounterInner>() -> u32 {
+    size_of::<C>() as u32 * 8
+}
+
+fn state_empty<C: CounterInner>() -> C {
+    C::from(0u8)
+}
+
+fn state_locked<C: CounterInner>() -> C {
+    C::from(1u8) << (counter_bits::<C>() - 2)
+}
+
+fn state_filled<C: CounterInner>() -> C {
+    C::from(2u8) << (counter_bits::<C>() - 2)
+}
+
+fn state_mask<C: CounterInner>() -> C {
+    C::from(3u8) << (counter_bits::<C>() - 2)
+}
+
+pub struct BorrowChannel<T: ChannelBorrow, L: ChannelLock> {
+    data: UnsafeCell<MaybeUninit<T::Borrowed<'static>>>,
+    count: L::Counter,
+    _p: PhantomData<T>,
+}
+
+pub struct BorrowChannelGuard<'a, T: ChannelBorrow, L: ChannelLock> {
+    channel: &'a BorrowChannel<T, L>,
+}
+
+impl<T: ChannelBorrow, L: ChannelLock> Drop for BorrowChannelGuard<'_, T, L> {
     fn drop(&mut self) {
-        self.channel.count.set(self.channel.count.get() - 1)
+        self.channel.count.fetch_sub(1u8.into(), Release);
     }
 }
 
-impl<'a, T: ChannelBorrow> Deref for LocalBorrowChannelGuard<'a, T> {
+impl<'a, T: ChannelBorrow, L: ChannelLock> Deref for BorrowChannelGuard<'a, T, L> {
     type Target = T::Borrowed<'a>;
 
     fn deref(&self) -> &Self::Target {
-        &self.borrowed
+        unsafe {
+            transmute::<&MaybeUninit<T::Borrowed<'_>>, &T::Borrowed<'_>>(&*self.channel.data.get())
+        }
     }
 }
 
-impl<'a, T: ChannelBorrow> DerefMut for LocalBorrowChannelGuard<'a, T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.borrowed
+impl<T: ChannelBorrow, L: ChannelLock> BorrowChannelGuard<'_, T, L> {
+    pub fn with<'b>(&'b mut self, f: impl FnOnce(T::Borrowed<'b>)) {
+        f(unsafe {
+            transmute::<T::Borrowed<'_>, T::Borrowed<'_>>(
+                (*self.channel.data.get()).assume_init_read(),
+            )
+        })
     }
 }
 
-impl<T: ChannelBorrow> LocalBorrowChannel<T> {
-    pub fn new() -> Self {
-        LocalBorrowChannel {
-            ptr: Cell::new(ptr::null_mut()),
-            count: Cell::new(0),
+impl<T: ChannelBorrow> BorrowChannel<T, UnsyncLock<u64>> {
+    pub fn new_unsync() -> Self {
+        unsafe { Self::new() }
+    }
+}
+
+impl<T: ChannelBorrow> BorrowChannel<T, SyncLock<u64>> {
+    pub fn new_sync() -> Self {
+        unsafe { Self::new() }
+    }
+}
+
+impl<T: ChannelBorrow, L: ChannelLock> BorrowChannel<T, L> {
+    pub unsafe fn new() -> Self {
+        BorrowChannel {
+            data: UnsafeCell::new(MaybeUninit::uninit()),
+            count: L::Counter::new(state_empty()),
             _p: PhantomData,
         }
     }
 
     pub fn lend<R>(&self, p: T::Borrowed<'_>, f: impl FnOnce() -> R) -> R {
-        assert!(self.ptr.get().is_null());
-        debug_assert!(self.count.get() == 0);
+        self.count
+            .compare_exchange(state_empty(), state_locked(), Acquire, Relaxed)
+            .expect("borrow channel is not empty");
         defer! {
-            if self.count.get() != 0{
+            if self.count.compare_exchange(state_filled(),state_empty(),Acquire,Relaxed).is_err(){
                 abort();
             }
-            self.ptr.set(ptr::null_mut());
         }
-        self.ptr.set(T::to_ptr(p));
+        unsafe {
+            self.data.get().write(MaybeUninit::new(transmute::<
+                T::Borrowed<'_>,
+                T::Borrowed<'static>,
+            >(p)));
+        }
+        self.count.store(state_filled(), Release);
         f()
     }
 
-    pub fn borrow(&self) -> LocalBorrowChannelGuard<'_, T> {
-        let p = self.ptr.get();
-        let old_count = self.count.get();
+    pub fn borrow(&self) -> BorrowChannelGuard<'_, T, L> {
+        let old_count = self.count.fetch_add(1u8.into(), Acquire);
+        let guard = BorrowChannelGuard { channel: self };
+        assert!(
+            old_count & state_mask() == state_filled(),
+            "channel is empty"
+        );
         if !T::IS_SHARED {
             assert!(
-                old_count == 0,
-                "attempt to get multiple borrows into non shared channel"
+                old_count == state_filled(),
+                "channel is already borrowed from"
             );
         }
-        self.count.set(old_count + 1);
-        LocalBorrowChannelGuard {
-            channel: self,
-            borrowed: unsafe { T::from_ptr(p) },
-        }
+        debug_assert!(
+            (old_count + 1u8.into()) & state_mask() == state_filled(),
+            "channel counter overflow"
+        );
+        guard
     }
 }
 
@@ -102,25 +190,9 @@ extern "C" fn abort() {
 unsafe impl<T: Sized> ChannelBorrow for &'static T {
     const IS_SHARED: bool = true;
     type Borrowed<'a> = &'a T;
-
-    fn to_ptr(b: Self::Borrowed<'_>) -> *mut () {
-        b as *const T as *const () as *mut ()
-    }
-
-    unsafe fn from_ptr<'a>(p: *mut ()) -> Self::Borrowed<'a> {
-        unsafe { &*(p as *const T) }
-    }
 }
 
 unsafe impl<T: Sized> ChannelBorrow for &'static mut T {
     const IS_SHARED: bool = false;
     type Borrowed<'a> = &'a mut T;
-
-    fn to_ptr(b: Self::Borrowed<'_>) -> *mut () {
-        b as *mut T as *mut ()
-    }
-
-    unsafe fn from_ptr<'a>(p: *mut ()) -> Self::Borrowed<'a> {
-        unsafe { &mut *(p as *mut T) }
-    }
 }
