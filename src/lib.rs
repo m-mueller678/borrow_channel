@@ -27,7 +27,7 @@ use core::cell::{Cell, UnsafeCell};
 use core::fmt::Debug;
 use core::marker::PhantomData;
 use core::mem::{transmute, MaybeUninit};
-use core::ops::{Deref, Shl};
+use core::ops::Shl;
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use radium::marker::{Nuclear, NumericOps};
 use radium::{Isotope, Radium};
@@ -104,6 +104,7 @@ trait ChannelLockPriv {
 /// - empty: a channel with no data inserted
 /// - locked: a channel where the borrow is being written by `lend`
 /// - filled: a channel containing a valid borrow
+///
 /// the counter represents the number of active reborrows created via `borrow`
 /// outside the filled state, the counter should be 0, however it may be temporarily incremented by borrow calls before they inspect the state.
 trait CounterInnerPriv:
