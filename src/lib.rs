@@ -157,6 +157,12 @@ impl<T: Reborrowable, L: Lock> BorrowChannelGuard<'_, T, L> {
     }
 }
 
+const _: () = {
+    if cfg!(all(feature = "unsafe_disable_abort", not(debug_assertions))) {
+        panic!("The unsafe_disable_abort feature is intended only for testing. It makes BorrowChannel unsound.");
+    }
+};
+
 impl<T: Reborrowable, L: Lock> BorrowChannel<T, L> {
     /// Construct a channel with an arbitrary `ChannelLock`.
     /// Callers must ensure the lock will not overflow.
@@ -244,9 +250,17 @@ impl<T: Reborrowable> BorrowChannel<T, SyncLock<u64>> {
     }
 }
 
-extern "C" fn abort() {
-    // guaranteed to abort
-    panic!("abort");
+fn abort() -> ! {
+    extern "C" fn inner_abort() -> ! {
+        // guaranteed to abort
+        panic!("abort");
+    }
+
+    if cfg!(feature = "unsafe_disable_abort") {
+        panic!("abort");
+    } else {
+        inner_abort()
+    }
 }
 
 unsafe impl<T: Sized> Reborrowable for &'static T {

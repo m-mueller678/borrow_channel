@@ -9,6 +9,9 @@ description = "A channel for borrows"
 repository = "https://github.com/m-mueller678/borrow_channel"
 license = "MIT OR Apache-2.0"
 
+[features]
+unsafe_disable_abort = []
+
 [dependencies]
 scopeguard = "1.2.0"
 radium = "1.1.0"
