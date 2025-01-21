@@ -2,6 +2,12 @@
 name = "borrow_channel"
 version = "0.1.0"
 edition = "2021"
+keywords = ["borrow","lifetime","refcell"]
+categories = ["rust-patterns","no-std::no-alloc","memory-management"]
+authors = ["m-mueller678"]
+description = "A channel for borrows"
+repository = "https://github.com/m-mueller678/borrow_channel"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 scopeguard = "1.2.0"
