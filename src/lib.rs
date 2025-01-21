@@ -282,5 +282,6 @@ unsafe impl<T: Reborrowable, L: Lock> Sync for BorrowChannel<T, L>
 where
     L: Sync,
     T: Send + Sync,
+    for<'a> T::Borrowed<'a>: Send + Sync,
 {
 }
