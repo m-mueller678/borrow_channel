@@ -49,16 +49,15 @@ pub unsafe trait ChannelBorrow {
     type Borrowed<'a>;
 }
 
-pub struct UnsyncLock<T: CounterInner> {
+pub struct UnsyncLock<T> {
     _p: PhantomData<T>,
 }
-pub struct SyncLock<T: CounterInner> {
+pub struct SyncLock<T> {
     _p: PhantomData<T>,
 }
 
 macro_rules! impl_channel_lock {
     ($T:ty) => {
-        impl CounterInner for $T {}
         impl CounterInnerPriv for $T {}
         impl ChannelLock for UnsyncLock<$T> {}
         impl ChannelLockPriv for UnsyncLock<$T> {
@@ -86,8 +85,6 @@ trait ChannelLockPriv {
     type Counter: Radium<Item = Self::CounterInner>;
 }
 
-#[allow(private_bounds)]
-pub trait CounterInner: CounterInnerPriv {}
 trait CounterInnerPriv:
     From<u8> + Shl<u32, Output = Self> + NumericOps + Debug + Copy + Nuclear
 {
