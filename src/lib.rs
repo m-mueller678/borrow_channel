@@ -42,10 +42,6 @@ use scopeguard::defer;
 /// - Creating a `Borrowed<'short>` from a `Borrowed<'long>` by transmuting/copying its bytes must be safe if `'long` outlives `'short`.
 /// - Multiple such reborrowed copies may be made.
 /// - If `Shared` is `false`, users of the trait must not create copies with overlapping lifetimes.
-///
-/// Moreover, `Borrowed` must have no interior mutability (the unstable [Freeze](core::marker::Freeze) trait).
-/// This requirement is to enable implementing Deref.
-/// It may be relaxed once Freeze is stabilized.
 pub unsafe trait Reborrowable {
     const IS_SHARED: bool;
     type Borrowed<'a>;
