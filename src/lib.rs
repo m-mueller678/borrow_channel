@@ -99,6 +99,13 @@ trait ChannelLockPriv {
     fn new() -> Self;
 }
 
+/// A counter consists of a state (the 2 most significant bits) and a count
+/// there are three states:
+/// - empty: a channel with no data inserted
+/// - locked: a channel where the borrow is being written by `lend`
+/// - filled: a channel containing a valid borrow
+/// the counter represents the number of active reborrows created via `borrow`
+/// outside the filled state, the counter should be 0, however it may be temporarily incremented by borrow calls before they inspect the state.
 trait CounterInnerPriv:
     From<u8> + Shl<u32, Output = Self> + NumericOps + Debug + Copy + Nuclear
 {
@@ -209,11 +216,19 @@ impl<T: Reborrowable, L: Lock> BorrowChannel<T, L> {
     /// If the borrow is still in use when the providing call to [borrow](Self::borrow) ends, the program aborts.
     pub fn borrow(&self) -> BorrowChannelGuard<'_, T, L> {
         let old_count = self.count().fetch_add(1u8.into(), Acquire);
+        if old_count & state_mask() != state_filled() {
+            self.count()
+                .fetch_update(Relaxed, Relaxed, |x| {
+                    if x & state_mask() != state_filled() {
+                        Some(x & state_mask())
+                    } else {
+                        None
+                    }
+                })
+                .ok();
+            panic!("channel is empty");
+        };
         let guard = BorrowChannelGuard { channel: self };
-        assert!(
-            old_count & state_mask() == state_filled(),
-            "channel is empty"
-        );
         if !T::IS_SHARED {
             assert!(
                 old_count == state_filled(),
