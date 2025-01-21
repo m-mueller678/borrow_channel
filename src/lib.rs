@@ -152,6 +152,14 @@ impl<T: Reborrowable, L: Lock> BorrowChannelGuard<'_, T, L> {
             ptr.cast::<T::Borrowed<'_>>().read()
         }
     }
+
+    pub fn get(&self) -> &T::Borrowed<'_> {
+        unsafe {
+            transmute::<&MaybeUninit<T::Borrowed<'static>>, &T::Borrowed<'_>>(
+                &*self.channel.data.get(),
+            )
+        }
+    }
 }
 
 const _: () = {
