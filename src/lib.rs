@@ -14,7 +14,9 @@
 //! let mut_channel = Rc::new(BorrowChannel::<&mut i32, _>::new_unsync());
 //!
 //! let reads_a = || {
-//!     assert_eq!(**channel.borrow(), 42);
+//!     channel.borrow().with(|a| {
+//!         assert_eq!(*a, 42);
+//!     })
 //! };
 //! let writes_a = || mut_channel.borrow().with(|b| *b = 42);
 //!
