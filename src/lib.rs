@@ -260,6 +260,6 @@ unsafe impl<T: Sized> Reborrowable for &'static mut T {
 unsafe impl<T: Reborrowable, L: Lock> Sync for BorrowChannel<T, L>
 where
     L: Sync,
-    T: Send,
+    T: Send + Sync,
 {
 }
