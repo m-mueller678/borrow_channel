@@ -22,11 +22,9 @@ fn local() {
     let channel = Rc::new(BorrowChannel::<&String, _>::new_unsync());
     let mut_channel = Rc::new(BorrowChannel::<&mut String, _>::new_unsync());
     let reads_a = || {
-        channel.borrow().with(|a| {
-            assert_eq!(&make_string(1), a);
-        })
+        assert_eq!(&make_string(1), channel.borrow().get_mut());
     };
-    let writes_a = || mut_channel.borrow().with(|a| *a = make_string(1));
+    let writes_a = || *mut_channel.borrow().get_mut() = make_string(1);
     let mut a = make_string(0);
     mut_channel.lend(&mut a, writes_a);
     channel.lend(&mut a, reads_a);

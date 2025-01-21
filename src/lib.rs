@@ -14,11 +14,9 @@
 //! let mut_channel = Rc::new(BorrowChannel::<&mut i32, _>::new_unsync());
 //!
 //! let reads_a = || {
-//!     channel.borrow().with(|a| {
-//!         assert_eq!(*a, 42);
-//!     })
+//!     assert_eq!(42, *channel.borrow().get_mut());
 //! };
-//! let writes_a = || mut_channel.borrow().with(|b| *b = 42);
+//! let writes_a = || *mut_channel.borrow().get_mut() = 42;
 //!
 //! let mut a = 0;
 //! mut_channel.lend(&mut a, writes_a);
@@ -46,7 +44,6 @@ pub unsafe trait Reborrowable {
     const IS_SHARED: bool;
     type Borrowed<'a>;
 }
-
 /// Used in a [BorrowChannel] that does not support access from multiple threads.
 pub struct UnsyncLock<T: Nuclear>(Cell<T>);
 
@@ -149,11 +146,11 @@ impl<T: Reborrowable, L: Lock> Drop for BorrowChannelGuard<'_, T, L> {
 }
 
 impl<T: Reborrowable, L: Lock> BorrowChannelGuard<'_, T, L> {
-    pub fn with<'b, R>(&'b mut self, f: impl FnOnce(T::Borrowed<'b>) -> R) -> R {
-        f(unsafe {
+    pub fn get_mut(&mut self) -> T::Borrowed<'_> {
+        unsafe {
             let ptr: *const MaybeUninit<T::Borrowed<'static>> = self.channel.data.get();
             ptr.cast::<T::Borrowed<'_>>().read()
-        })
+        }
     }
 }
 
