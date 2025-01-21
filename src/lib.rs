@@ -149,18 +149,6 @@ impl<T: Reborrowable, L: Lock> Drop for BorrowChannelGuard<'_, T, L> {
     }
 }
 
-impl<'a, T: Reborrowable, L: Lock> Deref for BorrowChannelGuard<'a, T, L> {
-    type Target = T::Borrowed<'a>;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe {
-            transmute::<&MaybeUninit<T::Borrowed<'static>>, &T::Borrowed<'_>>(
-                &*self.channel.data.get(),
-            )
-        }
-    }
-}
-
 impl<T: Reborrowable, L: Lock> BorrowChannelGuard<'_, T, L> {
     pub fn with<'b>(&'b mut self, f: impl FnOnce(T::Borrowed<'b>)) {
         f(unsafe {
