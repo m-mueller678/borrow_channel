@@ -28,6 +28,7 @@ use core::fmt::Debug;
 use core::marker::PhantomData;
 use core::mem::{transmute, MaybeUninit};
 use core::ops::Shl;
+use core::pin::Pin;
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use radium::marker::{Nuclear, NumericOps};
 use radium::{Isotope, Radium};
@@ -289,4 +290,14 @@ where
     T: Send + Sync,
     for<'a> T::Borrowed<'a>: Send + Sync,
 {
+}
+
+unsafe impl<T: Sized> Reborrowable for Pin<&'static T> {
+    const IS_SHARED: bool = true;
+    type Borrowed<'a> = Pin<&'a T>;
+}
+
+unsafe impl<T: Sized> Reborrowable for Pin<&'static mut T> {
+    const IS_SHARED: bool = false;
+    type Borrowed<'a> = Pin<&'a mut T>;
 }
