@@ -39,7 +39,12 @@ use scopeguard::defer;
 /// `Borrowed` must behave like a reference with regard to reborrowing:
 /// - Creating a `Borrowed<'short>` from a `Borrowed<'long>` by transmuting/copying its bytes must be safe if `'long` outlives `'short`.
 /// - Multiple such reborrowed copies may be made.
-/// - If `Shared` is `false`, users of the trait must not create copies with overlapping lifetimes.
+/// - If `Shared` is `false`, users of the trait must not
+/// create copies with overlapping lifetimes.
+/// - the type should not implement Drop
+///
+/// BorrowChannel does not currently call drop on reborrows, although it could probably be done.
+/// If you have a reference type that can be copied as described above but also implements Drop, please file an issue.
 pub unsafe trait Reborrowable {
     const IS_SHARED: bool;
     type Borrowed<'a>;
