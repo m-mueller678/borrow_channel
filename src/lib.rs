@@ -44,8 +44,8 @@ use scopeguard::defer;
 /// create copies with overlapping lifetimes.
 /// - the type should not implement Drop
 ///
-/// BorrowChannel does not currently call drop on reborrows, although it could probably be done.
-/// If you have a reference type that can be copied as described above but also implements Drop, please file an issue.
+/// `BorrowChannel` does not currently call `drop` on reborrows, although it could probably be done.
+/// If you have a reference type that can be copied as described above but also implements `Drop`, please file an issue.
 pub unsafe trait Reborrowable {
     const IS_SHARED: bool;
     type Borrowed<'a>;
