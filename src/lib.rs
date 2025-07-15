@@ -41,14 +41,16 @@ use scopeguard::defer;
 /// - Creating a `Borrowed<'short>` from a `Borrowed<'long>` by transmuting/copying its bytes must be safe if `'long` outlives `'short`.
 /// - Multiple such reborrowed copies may be made.
 /// - If `Shared` is `false`, users of the trait must not
-/// create copies with overlapping lifetimes.
+///   create copies with overlapping lifetimes.
 /// - the type should not implement Drop
 ///
 /// `BorrowChannel` does not currently call `drop` on reborrows, although it could probably be done.
 /// If you have a reference type that can be copied as described above but also implements `Drop`, please file an issue.
-pub unsafe trait Reborrowable {
+pub unsafe trait Reborrowable<'r> {
     const IS_SHARED: bool;
-    type Borrowed<'a>;
+    type Borrowed<'a>
+    where
+        'r: 'a;
 }
 /// Used in a [BorrowChannel] that does not support access from multiple threads.
 pub struct UnsyncLock<T: Nuclear>(Cell<T>);
@@ -134,36 +136,34 @@ fn state_mask<C: CounterInnerPriv>() -> C {
 }
 
 /// A channel for sending borrows.
-pub struct BorrowChannel<T: Reborrowable, L: Lock> {
-    data: UnsafeCell<MaybeUninit<T::Borrowed<'static>>>,
+pub struct BorrowChannel<'r, T: Reborrowable<'r>, L: Lock> {
+    data: UnsafeCell<MaybeUninit<T::Borrowed<'r>>>,
     count: L,
     _p: PhantomData<T>,
 }
 
 /// Returned from [borrow](BorrowChannel::borrow).
-pub struct BorrowChannelGuard<'a, T: Reborrowable, L: Lock> {
-    channel: &'a BorrowChannel<T, L>,
+pub struct BorrowChannelGuard<'r: 'a, 'a, T: Reborrowable<'r>, L: Lock> {
+    channel: &'a BorrowChannel<'r, T, L>,
 }
 
-impl<T: Reborrowable, L: Lock> Drop for BorrowChannelGuard<'_, T, L> {
+impl<'r: 'a, 'a, T: Reborrowable<'r>, L: Lock> Drop for BorrowChannelGuard<'r, 'a, T, L> {
     fn drop(&mut self) {
         self.channel.count().fetch_sub(1u8.into(), Release);
     }
 }
 
-impl<T: Reborrowable, L: Lock> BorrowChannelGuard<'_, T, L> {
+impl<'r: 'a, 'a, T: Reborrowable<'r>, L: Lock> BorrowChannelGuard<'r, 'a, T, L> {
     pub fn get_mut(&mut self) -> T::Borrowed<'_> {
         unsafe {
-            let ptr: *const MaybeUninit<T::Borrowed<'static>> = self.channel.data.get();
+            let ptr: *const MaybeUninit<T::Borrowed<'r>> = self.channel.data.get();
             ptr.cast::<T::Borrowed<'_>>().read()
         }
     }
 
     pub fn get(&self) -> &T::Borrowed<'_> {
         unsafe {
-            transmute::<&MaybeUninit<T::Borrowed<'static>>, &T::Borrowed<'_>>(
-                &*self.channel.data.get(),
-            )
+            transmute::<&MaybeUninit<T::Borrowed<'r>>, &T::Borrowed<'_>>(&*self.channel.data.get())
         }
     }
 }
@@ -174,7 +174,7 @@ const _: () = {
     }
 };
 
-impl<T: Reborrowable, L: Lock> BorrowChannel<T, L> {
+impl<'r, T: Reborrowable<'r>, L: Lock> BorrowChannel<'r, T, L> {
     /// Construct a channel with an arbitrary `ChannelLock`.
     /// Callers must ensure the lock will not overflow.
     /// Consider using [new_sync](Self::new_sync) or [new_unsync](Self::new_unsync), which use a 62 bit counter, making overflow practically impossible.
@@ -196,7 +196,10 @@ impl<T: Reborrowable, L: Lock> BorrowChannel<T, L> {
     ///
     /// While `f` executes, the borrow can be retrieved using [borrow](Self::borrow).
     /// If the borrow is still in use when `f` exits (return or unwind), the program aborts.
-    pub fn lend<R>(&self, borrow: T::Borrowed<'_>, f: impl FnOnce() -> R) -> R {
+    pub fn lend<'a, R>(&self, borrow: T::Borrowed<'a>, f: impl FnOnce() -> R) -> R
+    where
+        'r: 'a,
+    {
         self.count()
             .compare_exchange(state_empty(), state_locked(), Acquire, Relaxed)
             .expect("borrow channel is not empty");
@@ -207,8 +210,8 @@ impl<T: Reborrowable, L: Lock> BorrowChannel<T, L> {
         }
         unsafe {
             self.data.get().write(MaybeUninit::new(transmute::<
-                T::Borrowed<'_>,
-                T::Borrowed<'static>,
+                T::Borrowed<'a>,
+                T::Borrowed<'r>,
             >(borrow)));
         }
         self.count().store(state_filled(), Release);
@@ -218,7 +221,7 @@ impl<T: Reborrowable, L: Lock> BorrowChannel<T, L> {
     /// Use a borrow that was provided using [lend](Self::lend).
     ///
     /// If the borrow is still in use when the providing call to `lend` ends, the program aborts.
-    pub fn borrow(&self) -> BorrowChannelGuard<'_, T, L> {
+    pub fn borrow(&self) -> BorrowChannelGuard<'r, '_, T, L> {
         let old_count = self.count().fetch_add(1u8.into(), Acquire);
         if old_count & state_mask() != state_filled() {
             self.count()
@@ -247,14 +250,14 @@ impl<T: Reborrowable, L: Lock> BorrowChannel<T, L> {
     }
 }
 
-impl<T: Reborrowable> BorrowChannel<T, UnsyncLock<u64>> {
+impl<'r, T: Reborrowable<'r>> BorrowChannel<'r, T, UnsyncLock<u64>> {
     /// Construct a channel that can not be shared across threads.
     pub fn new_unsync() -> Self {
         unsafe { Self::new() }
     }
 }
 
-impl<T: Reborrowable> BorrowChannel<T, SyncLock<u64>> {
+impl<'r, T: Reborrowable<'r>> BorrowChannel<'r, T, SyncLock<u64>> {
     /// Construct a channel that can be shared across threads.
     pub fn new_sync() -> Self {
         unsafe { Self::new() }
@@ -274,17 +277,23 @@ fn abort() -> ! {
     }
 }
 
-unsafe impl<T: Sized> Reborrowable for &'static T {
+unsafe impl<'r, T: Sized + 'r> Reborrowable<'r> for &'r T {
     const IS_SHARED: bool = true;
-    type Borrowed<'a> = &'a T;
+    type Borrowed<'a>
+        = &'a T
+    where
+        'r: 'a;
 }
 
-unsafe impl<T: Sized> Reborrowable for &'static mut T {
+unsafe impl<'r, T: Sized> Reborrowable<'r> for &'r mut T {
     const IS_SHARED: bool = false;
-    type Borrowed<'a> = &'a mut T;
+    type Borrowed<'a>
+        = &'a mut T
+    where
+        'r: 'a;
 }
 
-unsafe impl<T: Reborrowable, L: Lock> Sync for BorrowChannel<T, L>
+unsafe impl<'r, T: Reborrowable<'r>, L: Lock> Sync for BorrowChannel<'r, T, L>
 where
     L: Sync,
     T: Send + Sync,
@@ -292,12 +301,18 @@ where
 {
 }
 
-unsafe impl<T: Sized> Reborrowable for Pin<&'static T> {
+unsafe impl<'r, T: Sized + 'static> Reborrowable<'r> for Pin<&'r T> {
     const IS_SHARED: bool = true;
-    type Borrowed<'a> = Pin<&'a T>;
+    type Borrowed<'a>
+        = Pin<&'a T>
+    where
+        'r: 'a;
 }
 
-unsafe impl<T: Sized> Reborrowable for Pin<&'static mut T> {
+unsafe impl<'r, T: Sized + 'static> Reborrowable<'r> for Pin<&'r mut T> {
     const IS_SHARED: bool = false;
-    type Borrowed<'a> = Pin<&'a mut T>;
+    type Borrowed<'a>
+        = Pin<&'a mut T>
+    where
+        'r: 'a;
 }
